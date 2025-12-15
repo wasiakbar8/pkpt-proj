@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>PKPT — Parallel Kernel Performance Tuning</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Chart.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+
+  <style>
+    :root{
+      --bg: #07090c;
+      --card: rgba(15, 18, 25, 0.78);
+      --stroke: rgba(255, 255, 255, 0.10);
+      --text: rgba(255,255,255,0.92);
+      --muted: rgba(255,255,255,0.65);
+      --y: #ffd400;
+      --shadow: 0 22px 70px rgba(0,0,0,0.55);
+    }
+    *{ box-sizing:border-box; }
+    html,body{ height:100%; }
+    body{
+      margin:0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color: var(--text);
+      background: radial-gradient(1200px 800px at 15% 10%, rgba(255,212,0,0.10), transparent 55%),
+                radial-gradient(1000px 700px at 85% 30%, rgba(255,212,0,0.08), transparent 60%),
+                linear-gradient(180deg, #05070a 0%, #07090c 40%, #06070a 100%);
+      overflow-x:hidden;
+    }
+    .bg-orbs{ position:fixed; inset:0; pointer-events:none; z-index:-1; }
+    .orb{
+      position:absolute; filter: blur(34px); opacity:0.65; border-radius:999px;
+      animation: float 10s ease-in-out infinite; mix-blend-mode: screen;
+    }
+    .orb-a{ width:520px; height:520px; left:-140px; top:-160px;
+      background: radial-gradient(circle at 30% 30%, rgba(255,212,0,0.55), rgba(255,212,0,0.02) 60%); }
+    .orb-b{ width:460px; height:460px; right:-160px; top:120px;
+      background: radial-gradient(circle at 40% 40%, rgba(255,212,0,0.45), rgba(255,212,0,0.02) 62%); animation-delay:-2.6s; }
+    .orb-c{ width:420px; height:420px; left:25%; bottom:-220px;
+      background: radial-gradient(circle at 40% 40%, rgba(255,212,0,0.35), rgba(255,212,0,0.02) 65%); animation-delay:-5.2s; }
+    @keyframes float{ 0%,100%{ transform: translate3d(0,0,0) scale(1); } 50%{ transform: translate3d(0,-20px,0) scale(1.03); } }
+
+    .topbar{
+      position:sticky; top:0; z-index:50;
+      backdrop-filter: blur(16px);
+      background: linear-gradient(180deg, rgba(8,10,14,0.92), rgba(8,10,14,0.55));
+      border-bottom: 1px solid var(--stroke);
+      display:flex; align-items:center; justify-content:space-between;
+      padding: 14px 22px;
+    }
+    .brand{ display:flex; align-items:center; gap:14px; }
+    .logo{
+      width:40px; height:40px; border-radius:14px;
+      background: linear-gradient(180deg, rgba(255,212,0,0.22), rgba(255,212,0,0.06));
+      border:1px solid rgba(255,212,0,0.24);
+      box-shadow: 0 10px 40px rgba(255,212,0,0.12);
+      display:grid; place-items:center;
+      position:relative; overflow:hidden;
+    }
+    .logo:before{
+      content:""; position:absolute; inset:-60%;
+      background: linear-gradient(90deg, transparent, rgba(255,212,0,0.35), transparent);
+      transform: rotate(25deg);
+      animation: sheen 2.6s ease-in-out infinite;
+    }
+    @keyframes sheen{ 0%{ transform: translateX(-40%) rotate(25deg);} 100%{ transform: translateX(40%) rotate(25deg);} }
+    .logo-dot{ width:7px; height:7px; border-radius:99px; background: var(--y); display:inline-block; margin:0 2px;
+      box-shadow: 0 0 18px rgba(255,212,0,0.45); }
+    .brand-text .title{ font-weight:800; letter-spacing:0.5px; }
+    .brand-text .subtitle{ font-size:12px; color:var(--muted); margin-top:2px; }
+    .top-actions{ display:flex; gap:10px; align-items:center; }
+
+    .container{ width: min(1180px, calc(100% - 32px)); margin: 18px auto 34px; }
+    .card{
+      background: var(--card);
+      border: 1px solid var(--stroke);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      overflow:hidden;
+    }
+
+    .hero{
+      display:grid; grid-template-columns: 1.1fr 0.9fr;
+      gap:18px; padding:22px; position:relative;
+    }
+    .hero:after{
+      content:""; position:absolute; inset:0;
+      background: radial-gradient(700px 240px at 40% -10%, rgba(255,212,0,0.16), transparent 60%);
+      pointer-events:none;
+    }
+    .hero-left h1{ margin:0 0 10px; font-size: clamp(22px, 2.4vw, 32px); line-height:1.15; }
+    .hero-left p{ margin:0 0 12px; color: var(--muted); max-width: 60ch; }
+    .hint{
+      display:inline-flex; gap:10px; align-items:center;
+      border:1px solid rgba(255,212,0,0.18);
+      background: rgba(255,212,0,0.08);
+      padding:10px 12px; border-radius: 14px;
+      color: rgba(255,255,255,0.80); font-size: 13px;
+    }
+
+    .kpi-grid{ display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    .kpi{
+      padding:14px 14px 12px;
+      border-radius:18px;
+      border:1px solid rgba(255,255,255,0.10);
+      background: rgba(10, 12, 16, 0.55);
+      position:relative;
+    }
+    .kpi:before{
+      content:""; position:absolute; inset:0;
+      background: radial-gradient(220px 120px at 30% 10%, rgba(255,212,0,0.16), transparent 62%);
+      pointer-events:none;
+    }
+    .kpi-label{ font-size:12px; color: var(--muted); }
+    .kpi-value{ margin-top:8px; font-size:26px; font-weight:800; letter-spacing:-0.4px; }
+    .kpi-foot{ margin-top:6px; font-size:12px; color: rgba(255,255,255,0.55); }
+
+    .grid{ margin-top:16px; display:grid; grid-template-columns: 0.9fr 1.1fr; gap:16px; }
+    .card-head{ display:flex; justify-content:space-between; align-items:center; padding: 18px 18px 10px; }
+    .card-head h2{ margin:0; font-size:16px; }
+
+    .pill{
+      display:inline-flex; gap:8px; align-items:center;
+      border:1px solid rgba(255,255,255,0.12);
+      padding:7px 10px; border-radius:999px;
+      color: rgba(255,255,255,0.75);
+      background: rgba(8,10,14,0.55);
+      font-size: 12px;
+    }
+    .pill .dot{ width:8px; height:8px; border-radius:99px; background: rgba(255,255,255,0.35); box-shadow: 0 0 16px rgba(255,255,255,0.12); }
+
+    .controls{ padding-bottom:16px; }
+    .control-row{ padding:10px 18px; display:grid; gap:8px; }
+    .control-row label{ font-size:13px; color: rgba(255,255,255,0.78); }
+    .control-input{ display:grid; grid-template-columns: 1fr auto; align-items:center; gap:12px; }
+    .value{
+      min-width:64px; text-align:center; padding:8px 10px; border-radius:14px;
+      border:1px solid rgba(255,255,255,0.12);
+      background: rgba(10,12,16,0.55);
+      font-weight:700;
+    }
+    input[type="range"]{ width:100%; accent-color: var(--y); }
+
+    .btn-row{ padding:14px 18px 8px; display:flex; gap:10px; flex-wrap:wrap; }
+    .btn{
+      border:1px solid rgba(255,255,255,0.14);
+      background: rgba(10,12,16,0.55);
+      color: var(--text);
+      border-radius:16px;
+      padding:10px 14px;
+      cursor:pointer;
+      font-weight:700;
+      transition: transform .14s ease, border-color .14s ease, background .14s ease;
+      user-select:none;
+      text-decoration:none;
+      display:inline-flex;
+      align-items:center;
+      gap:10px;
+    }
+    .btn:hover{ transform: translateY(-1px); border-color: rgba(255,212,0,0.35); }
+    .btn:active{ transform: translateY(0px) scale(0.99); }
+    .btn-primary{
+      background: linear-gradient(180deg, rgba(255,212,0,0.24), rgba(255,212,0,0.12));
+      border-color: rgba(255,212,0,0.34);
+    }
+    .btn-ghost{ background: rgba(8,10,14,0.35); }
+    .btn-icon{ filter: drop-shadow(0 6px 14px rgba(255,212,0,0.25)); }
+    .smallprint{ padding:0 18px 14px; color: rgba(255,255,255,0.55); font-size:12px; }
+
+    .charts{ padding-bottom:18px; }
+    .chip-row{ display:flex; gap:10px; align-items:center; padding: 0 18px 10px; }
+    .chip{
+      font-size:12px; padding:7px 10px; border-radius:999px;
+      background: rgba(255,212,0,0.10);
+      border: 1px solid rgba(255,212,0,0.18);
+      color: rgba(255,255,255,0.75);
+    }
+    .chart-wrap{ padding: 0 18px 18px; }
+    canvas{
+      width:100% !important;
+      background: rgba(10,12,16,0.35);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 18px;
+      padding: 10px;
+    }
+
+    .table-card{ margin-top:16px; }
+    .table-wrap{ padding: 0 18px 18px; overflow:auto; }
+    table{ width:100%; border-collapse: collapse; min-width: 840px; }
+    th,td{ text-align:left; padding: 12px 10px; border-bottom: 1px solid rgba(255,255,255,0.08); font-size:13px; }
+    th{ color: rgba(255,255,255,0.70); font-weight:700; }
+    tbody tr:hover td{ background: rgba(255,212,0,0.06); }
+    tbody tr.empty td{ text-align:center; color: rgba(255,255,255,0.55); }
+
+    .footer{
+      margin-top:16px; display:flex; justify-content:space-between; align-items:center;
+      color: rgba(255,255,255,0.55); padding: 8px 2px; font-size:12px;
+    }
+
+    @media (max-width: 980px){
+      .hero{ grid-template-columns: 1fr; }
+      .grid{ grid-template-columns: 1fr; }
+      .top-actions{ display:none; }
+    }
+    @media (max-width: 520px){
+      .kpi-grid{ grid-template-columns: 1fr; }
+      .btn{ width:100%; justify-content:center; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="bg-orbs" aria-hidden="true">
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="orb orb-c"></div>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">
+        <span class="logo-dot"></span><span class="logo-dot"></span><span class="logo-dot"></span>
+      </div>
+      <div class="brand-text">
+        <div class="title">PKPT</div>
+        <div class="subtitle">Parallel Kernel Performance Tuning UI</div>
+      </div>
+    </div>
+
+    <div class="top-actions">
+      <button id="btnClearCache" class="btn btn-ghost" title="Clear cached matrices">Clear Cache</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero card">
+      <div class="hero-left">
+        <h1>Dial threads + chunking, then watch speedup/efficiency move in real time.</h1>
+        <p>
+          This dashboard benchmarks a matrix-style kernel over row chunks and reports
+          baseline vs tuned performance, plus speedup and efficiency.
+        </p>
+        <div class="hint">Tip: Start with chunk size ~64–256 rows. Try threads = physical cores.</div>
+      </div>
+
+      <div class="hero-right">
+        <div class="kpi-grid">
+          <div class="kpi">
+            <div class="kpi-label">Speedup</div>
+            <div class="kpi-value" id="kpiSpeedup">—</div>
+            <div class="kpi-foot" id="kpiSpeedupFoot">Baseline vs tuned</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Efficiency</div>
+            <div class="kpi-value" id="kpiEfficiency">—</div>
+            <div class="kpi-foot" id="kpiEfficiencyFoot">Speedup / Threads</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Baseline (median)</div>
+            <div class="kpi-value" id="kpiBase">—</div>
+            <div class="kpi-foot">1 thread</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Tuned (median)</div>
+            <div class="kpi-value" id="kpiTuned">—</div>
+            <div class="kpi-foot">Selected threads</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <section class="card controls">
+        <div class="card-head">
+          <h2>Controls</h2>
+          <div class="pill" id="statusPill">
+            <span class="dot"></span>
+            <span id="statusText">Idle</span>
+          </div>
+        </div>
+
+        <div class="control-row">
+          <label for="threadCount">Thread count</label>
+          <div class="control-input">
+            <input id="threadCount" type="range" min="1" max="32" value="4" />
+            <div class="value" id="threadCountVal">4</div>
+          </div>
+        </div>
+
+        <div class="control-row">
+          <label for="chunkSize">Chunk size (rows per task)</label>
+          <div class="control-input">
+            <input id="chunkSize" type="range" min="1" max="1024" value="128" />
+            <div class="value" id="chunkSizeVal">128</div>
+          </div>
+        </div>
+
+        <div class="control-row">
+          <label for="matrixSize">Matrix size (N×N)</label>
+          <div class="control-input">
+            <input id="matrixSize" type="range" min="128" max="2048" step="64" value="1024" />
+            <div class="value" id="matrixSizeVal">1024</div>
+          </div>
+        </div>
+
+        <div class="control-row">
+          <label for="repeats">Repeats (median)</label>
+          <div class="control-input">
+            <input id="repeats" type="range" min="1" max="9" value="5" />
+            <div class="value" id="repeatsVal">5</div>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btnRun">
+            <span class="btn-icon">⚡</span>
+            Run Benchmark
+          </button>
+          <button class="btn btn-ghost" id="btnAutoSweep" title="Runs a quick sweep over thread counts">
+            Auto Sweep
+          </button>
+        </div>
+
+        <div class="smallprint">
+          Baseline is computed at 1 thread using the same chunk size and matrix size.
+        </div>
+      </section>
+
+      <section class="card charts">
+        <div class="card-head">
+          <h2>Charts</h2>
+        </div>
+        <div class="chip-row">
+          <div class="chip" id="chipConfig">—</div>
+        </div>
+
+        <div class="chart-wrap">
+          <canvas id="chartBars" height="120"></canvas>
+        </div>
+
+        <div class="chart-wrap">
+          <canvas id="chartLines" height="120"></canvas>
+        </div>
+      </section>
+    </section>
+
+    <section class="card table-card">
+      <div class="card-head">
+        <h2>Run History</h2>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Threads</th>
+              <th>Chunk</th>
+              <th>N</th>
+              <th>Baseline (s)</th>
+              <th>Tuned (s)</th>
+              <th>Speedup</th>
+              <th>Efficiency</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody">
+            <tr class="empty">
+              <td colspan="8">No runs yet. Hit “Run Benchmark”.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div>PKPT • Parallel Kernel Performance Tuning UI</div>
+      <div>Responsive, animated UI • Python + Flask backend</div>
+    </footer>
+  </main>
+
+  <script>
+    const el = (id) => document.getElementById(id);
+
+    const state = {
+      runCount: 0,
+      history: [],
+      charts: { bars: null, lines: null }
+    };
+
+    function fmt(x, digits = 2) {
+      if (x === null || x === undefined || Number.isNaN(x)) return "—";
+      return Number(x).toFixed(digits);
+    }
+    function fmtS(x) { return `${fmt(x, 4)} s`; }
+
+    function setStatus(mode, text) {
+      const pill = el("statusPill");
+      const dot = pill.querySelector(".dot");
+      el("statusText").textContent = text;
+
+      if (mode === "busy") {
+        dot.style.background = "rgba(255,212,0,0.9)";
+        dot.style.boxShadow = "0 0 18px rgba(255,212,0,0.55)";
+      } else if (mode === "ok") {
+        dot.style.background = "rgba(120,255,160,0.65)";
+        dot.style.boxShadow = "0 0 18px rgba(120,255,160,0.25)";
+      } else {
+        dot.style.background = "rgba(255,255,255,0.35)";
+        dot.style.boxShadow = "0 0 16px rgba(255,255,255,0.12)";
+      }
+    }
+
+    function bindSlider(sliderId, valueId) {
+      const s = el(sliderId);
+      const v = el(valueId);
+      v.textContent = s.value;
+      s.addEventListener("input", () => (v.textContent = s.value));
+    }
+
+    bindSlider("threadCount", "threadCountVal");
+    bindSlider("chunkSize", "chunkSizeVal");
+    bindSlider("matrixSize", "matrixSizeVal");
+    bindSlider("repeats", "repeatsVal");
+
+    function getConfig() {
+      return {
+        thread_count: parseInt(el("threadCount").value, 10),
+        chunk_size: parseInt(el("chunkSize").value, 10),
+        matrix_size: parseInt(el("matrixSize").value, 10),
+        repeats: parseInt(el("repeats").value, 10),
+      };
+    }
+
+    async function postJSON(url, payload) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`HTTP ${res.status}: ${txt}`);
+      }
+      return await res.json();
+    }
+
+    function updateKPIs(result) {
+      const m = result.metrics;
+
+      el("kpiSpeedup").textContent = fmt(m.speedup, 2) + "×";
+      el("kpiEfficiency").textContent = fmt(m.efficiency * 100, 1) + "%";
+      el("kpiBase").textContent = fmtS(m.baseline_median_s);
+      el("kpiTuned").textContent = fmtS(m.current_median_s);
+
+      el("kpiSpeedupFoot").textContent = `Baseline vs ${result.config.thread_count} threads`;
+      el("kpiEfficiencyFoot").textContent = `Speedup / ${result.config.thread_count} threads`;
+
+      el("chipConfig").textContent =
+        `Threads ${result.config.thread_count} • Chunk ${result.config.chunk_size} • N ${result.config.matrix_size} • Repeats ${result.config.repeats}`;
+    }
+
+    function ensureCharts() {
+      const barsCtx = el("chartBars");
+      const linesCtx = el("chartLines");
+
+      if (!state.charts.bars) {
+        state.charts.bars = new Chart(barsCtx, {
+          type: "bar",
+          data: {
+            labels: ["Baseline (1T)", "Tuned"],
+            datasets: [{
+              label: "Median time (s)",
+              data: [0, 0],
+              borderWidth: 1
+            }]
+          },
+          options: {
+            responsive: true,
+            animation: { duration: 650 },
+            plugins: { legend: { display: true } },
+            scales: { y: { beginAtZero: true } }
+          }
+        });
+      }
+
+      if (!state.charts.lines) {
+        state.charts.lines = new Chart(linesCtx, {
+          type: "line",
+          data: {
+            labels: [],
+            datasets: [
+              { label: "Speedup (×)", data: [], tension: 0.25 },
+              { label: "Efficiency (%)", data: [], tension: 0.25 }
+            ]
+          },
+          options: {
+            responsive: true,
+            animation: { duration: 650 },
+            plugins: { legend: { display: true } },
+            scales: { y: { beginAtZero: true } }
+          }
+        });
+      }
+    }
+
+    function updateCharts(result) {
+      ensureCharts();
+
+      const b = state.charts.bars;
+      b.data.datasets[0].data = [
+        result.metrics.baseline_median_s,
+        result.metrics.current_median_s
+      ];
+      b.update();
+
+      const idx = state.history.length;
+      const label = `#${idx + 1}`;
+      const speed = result.metrics.speedup;
+      const effPct = result.metrics.efficiency * 100;
+
+      const l = state.charts.lines;
+      l.data.labels.push(label);
+      l.data.datasets[0].data.push(speed);
+      l.data.datasets[1].data.push(effPct);
+      l.update();
+    }
+
+    function pushHistory(result) {
+      state.runCount += 1;
+      const row = {
+        run: state.runCount,
+        threads: result.config.thread_count,
+        chunk: result.config.chunk_size,
+        n: result.config.matrix_size,
+        base: result.metrics.baseline_median_s,
+        tuned: result.metrics.current_median_s,
+        speedup: result.metrics.speedup,
+        eff: result.metrics.efficiency
+      };
+      state.history.push(row);
+      localStorage.setItem("pkpt_history", JSON.stringify(state.history));
+    }
+
+    function renderHistory() {
+      const body = el("historyBody");
+      body.innerHTML = "";
+
+      if (state.history.length === 0) {
+        body.innerHTML = `<tr class="empty"><td colspan="8">No runs yet. Hit “Run Benchmark”.</td></tr>`;
+        return;
+      }
+
+      for (const r of state.history.slice().reverse()) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${r.run}</td>
+          <td>${r.threads}</td>
+          <td>${r.chunk}</td>
+          <td>${r.n}</td>
+          <td>${fmt(r.base, 4)}</td>
+          <td>${fmt(r.tuned, 4)}</td>
+          <td>${fmt(r.speedup, 2)}×</td>
+          <td>${fmt(r.eff * 100, 1)}%</td>
+        `;
+        body.appendChild(tr);
+      }
+    }
+
+    function loadHistory() {
+      try {
+        const raw = localStorage.getItem("pkpt_history");
+        if (!raw) return;
+        state.history = JSON.parse(raw) || [];
+        state.runCount = state.history.reduce((m, r) => Math.max(m, r.run || 0), 0);
+        renderHistory();
+
+        ensureCharts();
+        const l = state.charts.lines;
+        l.data.labels = [];
+        l.data.datasets[0].data = [];
+        l.data.datasets[1].data = [];
+        for (const r of state.history) {
+          l.data.labels.push(`#${r.run}`);
+          l.data.datasets[0].data.push(r.speedup);
+          l.data.datasets[1].data.push(r.eff * 100);
+        }
+        l.update();
+      } catch (_) {}
+    }
+
+    async function runBenchmark(cfg) {
+      setStatus("busy", "Running…");
+      el("btnRun").disabled = true;
+      el("btnAutoSweep").disabled = true;
+
+      try {
+        const result = await postJSON("/api/run", cfg);
+        updateKPIs(result);
+        updateCharts(result);
+        pushHistory(result);
+        renderHistory();
+        setStatus("ok", "Done");
+        return result;
+      } catch (err) {
+        console.error(err);
+        setStatus("idle", "Error");
+        alert("Benchmark failed: " + err.message);
+        throw err;
+      } finally {
+        el("btnRun").disabled = false;
+        el("btnAutoSweep").disabled = false;
+      }
+    }
+
+    el("btnRun").addEventListener("click", async () => {
+      await runBenchmark(getConfig());
+    });
+
+    el("btnClearCache").addEventListener("click", async () => {
+      try {
+        setStatus("busy", "Clearing…");
+        await postJSON("/api/clear_cache", {});
+        setStatus("ok", "Cache cleared");
+      } catch (e) {
+        setStatus("idle", "Error");
+      }
+    });
+
+    el("btnAutoSweep").addEventListener("click", async () => {
+      const cfg = getConfig();
+      const maxT = cfg.thread_count;
+
+      let best = null;
+      for (let t = 1; t <= maxT; t++) {
+        const r = await runBenchmark({ ...cfg, thread_count: t });
+        if (!best || r.metrics.current_median_s < best.metrics.current_median_s) best = r;
+      }
+
+      if (best) {
+        alert(
+          `Auto Sweep done.\nBest: ${best.config.thread_count} threads\nMedian: ${best.metrics.current_median_s.toFixed(4)} s\nSpeedup: ${best.metrics.speedup.toFixed(2)}×`
+        );
+      }
+    });
+
+    loadHistory();
+    setStatus("idle", "Idle");
+    ensureCharts();
+  </script>
+</body>
+</html>
