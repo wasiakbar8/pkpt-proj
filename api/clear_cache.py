@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, make_response, request
+from flask import Flask, jsonify, request
 import threading
 
 app = Flask(__name__)
@@ -17,14 +17,9 @@ def add_cors_headers(resp):
 @app.route("/api/clear_cache", methods=["POST", "OPTIONS"])
 def clear_cache():
     if request.method == "OPTIONS":
-        return make_response("", 204)
+        return ("", 204)
     
     with _ARRAY_CACHE_LOCK:
         _ARRAY_CACHE.clear()
     
     return jsonify({"status": "ok", "message": "Cache cleared"})
-
-# This is needed for Vercel
-def handler(request):
-    with app.request_context(request.environ):
-        return app.full_dispatch_request()
