@@ -12,7 +12,9 @@ from flask import Flask, jsonify, request, make_response, send_file
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 app = Flask(__name__)
-
+@app.route('/debug')
+def debug():
+    return "I am working!"
 # ---- CORS + Preflight ----
 @app.after_request
 def add_cors_headers(resp):
