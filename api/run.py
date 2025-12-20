@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-import time
 import threading
-import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from statistics import median
-from typing import Dict, Tuple, Any
+from typing import Any, Dict, Tuple
 
 import numpy as np
-from flask import Flask, jsonify, request, make_response, send_file
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from flask import Flask, jsonify, make_response, request
 
 app = Flask(__name__)
-@app.route('/debug')
-def debug():
-    return "I am working!"
+
 # ---- CORS + Preflight ----
 @app.after_request
 def add_cors_headers(resp):
@@ -23,6 +20,13 @@ def add_cors_headers(resp):
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     return resp
 
+
+# ---- Health / Debug endpoint ----
+@app.route("/api/debug", methods=["GET"])
+def debug():
+    return "I am working!"
+
+
 @dataclass(frozen=True)
 class BenchConfig:
     thread_count: int
@@ -30,8 +34,10 @@ class BenchConfig:
     matrix_size: int
     repeats: int
 
+
 _ARRAY_CACHE_LOCK = threading.Lock()
 _ARRAY_CACHE: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+
 
 def _get_arrays(n: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     with _ARRAY_CACHE_LOCK:
@@ -44,6 +50,7 @@ def _get_arrays(n: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         _ARRAY_CACHE[n] = (A, B, OUT)
         return A, B, OUT
 
+
 def _kernel_chunk(A: np.ndarray, B: np.ndarray, OUT: np.ndarray, i0: int, i1: int) -> None:
     a = A[i0:i1]
     b = B[i0:i1]
@@ -51,12 +58,15 @@ def _kernel_chunk(A: np.ndarray, B: np.ndarray, OUT: np.ndarray, i0: int, i1: in
     OUT[i0:i1] += np.sin(a)
     OUT[i0:i1] -= np.sqrt(np.abs(b))
 
+
 def _run_once(cfg: BenchConfig) -> float:
     A, B, OUT = _get_arrays(cfg.matrix_size)
     n = cfg.matrix_size
     chunk = max(1, min(cfg.chunk_size, n))
     ranges = [(i, min(i + chunk, n)) for i in range(0, n, chunk)]
+
     t0 = time.perf_counter()
+
     if cfg.thread_count <= 1:
         for i0, i1 in ranges:
             _kernel_chunk(A, B, OUT, i0, i1)
@@ -66,9 +76,12 @@ def _run_once(cfg: BenchConfig) -> float:
             futs = [ex.submit(_kernel_chunk, A, B, OUT, i0, i1) for (i0, i1) in ranges]
             for f in as_completed(futs):
                 f.result()
+
     return time.perf_counter() - t0
 
+
 def _benchmark(cfg: BenchConfig) -> Dict[str, Any]:
+    # warm-up
     _run_once(BenchConfig(cfg.thread_count, cfg.chunk_size, cfg.matrix_size, 1))
     times = [_run_once(cfg) for _ in range(cfg.repeats)]
     return {
@@ -79,6 +92,7 @@ def _benchmark(cfg: BenchConfig) -> Dict[str, Any]:
         "repeats": cfg.repeats,
     }
 
+
 def _clamp_int(x: Any, lo: int, hi: int, default: int) -> int:
     try:
         v = int(x)
@@ -86,26 +100,16 @@ def _clamp_int(x: Any, lo: int, hi: int, default: int) -> int:
         return default
     return max(lo, min(hi, v))
 
-# --- UPDATED ROUTE ---
-# Added "GET" to methods to allow browser loading
-@app.route("/", methods=["GET", "POST", "OPTIONS"])
+
+# ---- Main benchmark endpoint ----
+@app.route("/api/run", methods=["POST", "OPTIONS"])
 def run_benchmark():
-    # 1. Handle OPTIONS (Preflight)
+    # Preflight
     if request.method == "OPTIONS":
         return make_response("", 204)
 
-    # 2. Handle GET (Serve the HTML file)
-    if request.method == "GET":
-        # Look for index.html in the parent directory (root)
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        html_file = os.path.join(base_dir, 'index.html')
-        try:
-            return send_file(html_file)
-        except FileNotFoundError:
-            return "index.html not found. Please check your file structure.", 404
-
-    # 3. Handle POST (Run the Benchmark)
     data = request.get_json(silent=True) or {}
+
     threads = _clamp_int(data.get("thread_count"), 1, 64, 4)
     chunk_size = _clamp_int(data.get("chunk_size"), 1, 4096, 128)
     matrix_size = _clamp_int(data.get("matrix_size"), 128, 4096, 1024)
@@ -122,19 +126,27 @@ def run_benchmark():
     speedup = (t1 / tp) if tp > 0 else 0.0
     efficiency = (speedup / threads) if threads > 0 else 0.0
 
-    return jsonify({
-        "config": {
-            "thread_count": threads,
-            "chunk_size": chunk_size,
-            "matrix_size": matrix_size,
-            "repeats": repeats
-        },
-        "baseline": base,
-        "current": cur,
-        "metrics": {
-            "baseline_median_s": t1,
-            "current_median_s": tp,
-            "speedup": speedup,
-            "efficiency": efficiency
+    return jsonify(
+        {
+            "config": {
+                "thread_count": threads,
+                "chunk_size": chunk_size,
+                "matrix_size": matrix_size,
+                "repeats": repeats,
+            },
+            "baseline": base,
+            "current": cur,
+            "metrics": {
+                "baseline_median_s": t1,
+                "current_median_s": tp,
+                "speedup": speedup,
+                "efficiency": efficiency,
+            },
         }
-    })
+    )
+
+
+# This is needed for Vercel serverless functions
+def handler(request):
+    with app.request_context(request.environ):
+        return app.full_dispatch_request()
